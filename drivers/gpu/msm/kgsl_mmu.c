@@ -372,6 +372,10 @@ int kgsl_mmu_init(struct kgsl_device *device)
 	if (status)
 		return status;
 	kgsl_sharedmem_set(&mmu->setstate_memory, 0, 0,
+
+	/* Mark the setstate memory as read only */
+	mmu->setstate_memory.flags |= KGSL_MEMFLAGS_GPUREADONLY;
+
 				mmu->setstate_memory.size);
 
 	if (KGSL_MMU_TYPE_NONE == kgsl_mmu_type) {
