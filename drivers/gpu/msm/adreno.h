@@ -484,6 +484,11 @@ static inline int adreno_add_read_cmds(struct kgsl_device *device,
 	*cmds++ = val;
 	*cmds++ = 0xFFFFFFFF;
 	*cmds++ = 0xFFFFFFFF;
+
+	/* WAIT_REG_MEM turns back on protected mode - push it off */
+	*cmds++ = cp_type3_packet(CP_SET_PROTECTED_MODE, 1);
+	*cmds++ = 0;
+
 	cmds += __adreno_add_idle_indirect_cmds(cmds, nop_gpuaddr);
 	return cmds - start;
 }
@@ -508,6 +513,247 @@ static inline int adreno_add_idle_cmds(struct adreno_device *adreno_dev,
 	}
 
 	return cmds - start;
+}
+
+
+/*
+ * adreno_wait_reg_mem() - Add a CP_WAIT_REG_MEM command
+ * @cmds:	Pointer to memory where commands are to be added
+ * @addr:	Regiater address to poll for
+ * @val:	Value to poll for
+ * @mask:	The value against which register value is masked
+ * @interval:	wait interval
+ */
+static inline int adreno_wait_reg_mem(unsigned int *cmds, unsigned int addr,
+				unsigned int val, unsigned int mask,
+				unsigned int interval)
+{
+	unsigned int *start = cmds;
+	*cmds++ = cp_type3_packet(CP_WAIT_REG_MEM, 5);
+	*cmds++ = 0x3; /* Function = Equals */
+	*cmds++ = addr; /* Poll address */
+	*cmds++ = val; /* ref val */
+	*cmds++ = mask;
+	*cmds++ = interval;
+
+	/* WAIT_REG_MEM turns back on protected mode - push it off */
+	*cmds++ = cp_type3_packet(CP_SET_PROTECTED_MODE, 1);
+	*cmds++ = 0;
+
+	return cmds - start;
+}
+/*
+ * adreno_wait_reg_eq() - Add a CP_WAIT_REG_EQ command
+ * @cmds:	Pointer to memory where commands are to be added
+ * @addr:	Regiater address to poll for
+ * @val:	Value to poll for
+ * @mask:	The value against which register value is masked
+ * @interval:	wait interval
+ */
+static inline int adreno_wait_reg_eq(unsigned int *cmds, unsigned int addr,
+					unsigned int val, unsigned int mask,
+					unsigned int interval)
+{
+	unsigned int *start = cmds;
+	*cmds++ = cp_type3_packet(CP_WAIT_REG_EQ, 4);
+	*cmds++ = addr;
+	*cmds++ = val;
+	*cmds++ = mask;
+	*cmds++ = interval;
+	return cmds - start;
+}
+
+/*
+ * adreno_checkreg_off() - Checks the validity of a register enum
+ * @adreno_dev:		Pointer to adreno device
+ * @offset_name:	The register enum that is checked
+ */
+static inline bool adreno_checkreg_off(struct adreno_device *adreno_dev,
+					enum adreno_regs offset_name)
+{
+	if (offset_name >= ADRENO_REG_REGISTER_MAX ||
+		ADRENO_REG_UNUSED ==
+			adreno_dev->gpudev->reg_offsets->offsets[offset_name]) {
+		BUG_ON(1);
+	}
+	return true;
+}
+
+/*
+ * adreno_readreg() - Read a register by getting its offset from the
+ * offset array defined in gpudev node
+ * @adreno_dev:		Pointer to the the adreno device
+ * @offset_name:	The register enum that is to be read
+ * @val:		Register value read is placed here
+ */
+static inline void adreno_readreg(struct adreno_device *adreno_dev,
+				enum adreno_regs offset_name, unsigned int *val)
+{
+	struct kgsl_device *device = &adreno_dev->dev;
+	if (adreno_checkreg_off(adreno_dev, offset_name))
+		kgsl_regread(device,
+			adreno_dev->gpudev->reg_offsets->offsets[offset_name],
+								val);
+}
+
+/*
+ * adreno_writereg() - Write a register by getting its offset from the
+ * offset array defined in gpudev node
+ * @adreno_dev:		Pointer to the the adreno device
+ * @offset_name:	The register enum that is to be written
+ * @val:		Value to write
+ */
+static inline void adreno_writereg(struct adreno_device *adreno_dev,
+				enum adreno_regs offset_name, unsigned int val)
+{
+	struct kgsl_device *device = &adreno_dev->dev;
+	if (adreno_checkreg_off(adreno_dev, offset_name))
+		kgsl_regwrite(device,
+		adreno_dev->gpudev->reg_offsets->offsets[offset_name], val);
+}
+
+/*
+ * adreno_getreg() - Returns the offset value of a register from the
+ * register offset array in the gpudev node
+ * @adreno_dev:		Pointer to the the adreno device
+ * @offset_name:	The register enum whore offset is returned
+ */
+static inline unsigned int adreno_getreg(struct adreno_device *adreno_dev,
+				enum adreno_regs offset_name)
+{
+	if (!adreno_checkreg_off(adreno_dev, offset_name))
+		return ADRENO_REG_REGISTER_MAX;
+	return adreno_dev->gpudev->reg_offsets->offsets[offset_name];
+}
+
+/**
+ * adreno_gpu_fault() - Return the current state of the GPU
+ * @adreno_dev: A pointer to the adreno_device to query
+ *
+ * Return 0 if there is no fault or positive with the last type of fault that
+ * occurred
+ */
+static inline unsigned int adreno_gpu_fault(struct adreno_device *adreno_dev)
+{
+	smp_rmb();
+	return atomic_read(&adreno_dev->dispatcher.fault);
+}
+
+/**
+ * adreno_gpu_halt() - Return the halt status of GPU
+ * @adreno_dev: A pointer to the adreno_device to query
+ *
+ * Return the halt request value
+ */
+static inline unsigned int adreno_gpu_halt(struct adreno_device *adreno_dev)
+{
+	smp_rmb();
+	return atomic_read(&adreno_dev->halt);
+}
+
+/**
+ * adreno_set_gpu_fault() - Set the current fault status of the GPU
+ * @adreno_dev: A pointer to the adreno_device to set
+ * @state: fault state to set
+ *
+ */
+static inline void adreno_set_gpu_fault(struct adreno_device *adreno_dev,
+	int state)
+{
+	/* only set the fault bit w/o overwriting other bits */
+	atomic_add(state, &adreno_dev->dispatcher.fault);
+	smp_wmb();
+}
+
+/**
+ * adreno_set_gpu_halt() - Set the halt request
+ * @adreno_dev: A pointer to the adreno_device to set
+ * @state: Value to set
+ */
+static inline void adreno_set_gpu_halt(struct adreno_device *adreno_dev,
+	int state)
+{
+	atomic_set(&adreno_dev->halt, state);
+	smp_wmb();
+}
+
+/**
+ * adreno_clear_gpu_fault() - Clear the GPU fault register
+ * @adreno_dev: A pointer to an adreno_device structure
+ *
+ * Clear the GPU fault status for the adreno device
+ */
+
+static inline void adreno_clear_gpu_fault(struct adreno_device *adreno_dev)
+{
+	atomic_set(&adreno_dev->dispatcher.fault, 0);
+	smp_wmb();
+}
+
+/*
+ * adreno_vbif_start() - Program VBIF registers, called in device start
+ * @device: Pointer to device whose vbif data is to be programmed
+ * @vbif_platforms: list register value pair of vbif for a family
+ * of adreno cores
+ * @num_platforms: Number of platforms contained in vbif_platforms
+ */
+static inline void adreno_vbif_start(struct kgsl_device *device,
+			const struct adreno_vbif_platform *vbif_platforms,
+			int num_platforms)
+{
+	int i;
+	const struct adreno_vbif_data *vbif = NULL;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
+	for (i = 0; i < num_platforms; i++) {
+		if (vbif_platforms[i].devfunc(adreno_dev)) {
+			vbif = vbif_platforms[i].vbif;
+			break;
+		}
+	}
+	BUG_ON(vbif == NULL);
+	while (vbif->reg != 0) {
+		kgsl_regwrite(device, vbif->reg, vbif->val);
+		vbif++;
+	}
+}
+
+/**
+ * adreno_set_protected_registers() - Protect the specified range of registers
+ * from being accessed by the GPU
+ * @device: pointer to the KGSL device
+ * @index: Pointer to the index of the protect mode register to write to
+ * @reg: Starting dword register to write
+ * @mask_len: Size of the mask to protect (# of registers = 2 ** mask_len)
+ *
+ * Add the range of registers to the list of protected mode registers that will
+ * cause an exception if the GPU accesses them.  There are 16 available
+ * protected mode registers.  Index is used to specify which register to write
+ * to - the intent is to call this function multiple times with the same index
+ * pointer for each range and the registers will be magically programmed in
+ * incremental fashion
+ */
+static inline void adreno_set_protected_registers(struct kgsl_device *device,
+	unsigned int *index, unsigned int reg, int mask_len)
+{
+	unsigned int val;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
+	/* There are only 16 registers available */
+	BUG_ON(*index >= 16);
+
+	val = 0x60000000 | ((mask_len & 0x1F) << 24) | ((reg << 2) & 0xFFFFF);
+
+	/*
+	 * Write the protection range to the next available protection
+	 * register
+	 */
+
+	if (adreno_is_a4xx(adreno_dev))
+		kgsl_regwrite(device, A4XX_CP_PROTECT_REG_0 + *index, val);
+	else if (adreno_is_a3xx(adreno_dev))
+		kgsl_regwrite(device, A3XX_CP_PROTECT_REG_0 + *index, val);
+	*index = *index + 1;
 }
 
 #ifdef CONFIG_DEBUG_FS

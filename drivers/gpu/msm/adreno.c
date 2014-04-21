@@ -934,6 +934,14 @@ a3xx_getchipid(struct kgsl_device *device)
 {
 	struct kgsl_device_platform_data *pdata =
 		kgsl_device_get_drvdata(device);
+	phys_addr_t pt_val;
+	unsigned int *link = NULL, *cmds;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	int num_iommu_units;
+	struct kgsl_context *context;
+	struct adreno_context *adreno_ctx = NULL;
+	struct adreno_ringbuffer *rb = &adreno_dev->ringbuffer;
+	unsigned int result;
 
 	/*
 	 * All current A3XX chipids are detected at the SOC level. Leave this
@@ -951,6 +959,15 @@ a2xx_getchipid(struct kgsl_device *device)
 	unsigned int coreid, majorid, minorid, patchid, revid;
 	struct kgsl_device_platform_data *pdata =
 		kgsl_device_get_drvdata(device);
+	link = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (link == NULL) {
+		result = -ENOMEM;
+		goto done;
+	}
+
+	cmds = link;
+
+	result = kgsl_mmu_enable_clk(&device->mmu, KGSL_IOMMU_CONTEXT_USER);
 
 	/* If the chip id is set at the platform level, then just use that */
 
@@ -973,6 +990,21 @@ a2xx_getchipid(struct kgsl_device *device)
 	chipid |= ((majorid >> 4) & 0xF) << 16;
 
 	minorid = ((revid >> 0)  & 0xFF);
+	/* invalidate all base pointers */
+	*cmds++ = cp_type3_packet(CP_INVALIDATE_STATE, 1);
+	*cmds++ = 0x7fff;
+
+	if ((unsigned int) (cmds - link) > (PAGE_SIZE / sizeof(unsigned int))) {
+		KGSL_DRV_ERR(device, "Temp command buffer overflow\n");
+		BUG();
+	}
+	/*
+	 * This returns the per context timestamp but we need to
+	 * use the global timestamp for iommu clock disablement
+	 */
+	result = adreno_ringbuffer_issuecmds(device, adreno_ctx,
+			KGSL_CMD_FLAGS_PMODE, link,
+			(unsigned int)(cmds - link));
 
 	patchid = ((revid >> 16) & 0xFF);
 
@@ -986,6 +1018,10 @@ a2xx_getchipid(struct kgsl_device *device)
 	chipid |= (minorid << 8) | patchid;
 
 	return chipid;
+done:
+	kfree(link);
+	kgsl_context_put(context);
+	return result;
 }
 
 static unsigned int

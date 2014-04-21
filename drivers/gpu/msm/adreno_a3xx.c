@@ -3844,6 +3844,45 @@ static void a3xx_start(struct adreno_device *adreno_dev)
 			break;
 		}
 	}
+/**
+ * a3xx_protect_init() - Initializes register protection on a3xx
+ * @device: Pointer to the device structure
+ * Performs register writes to enable protected access to sensitive
+ * registers
+ */
+static void a3xx_protect_init(struct kgsl_device *device)
+{
+	int index = 0;
+
+	/* enable access protection to privileged registers */
+	kgsl_regwrite(device, A3XX_CP_PROTECT_CTRL, 0x00000007);
+
+	/* RBBM registers */
+	adreno_set_protected_registers(device, &index, 0x18, 0);
+	adreno_set_protected_registers(device, &index, 0x20, 2);
+	adreno_set_protected_registers(device, &index, 0x33, 0);
+	adreno_set_protected_registers(device, &index, 0x42, 0);
+	adreno_set_protected_registers(device, &index, 0x50, 4);
+	adreno_set_protected_registers(device, &index, 0x63, 0);
+	adreno_set_protected_registers(device, &index, 0x100, 4);
+
+	/* CP registers */
+	adreno_set_protected_registers(device, &index, 0x1C0, 5);
+	adreno_set_protected_registers(device, &index, 0x1EC, 1);
+	adreno_set_protected_registers(device, &index, 0x1F6, 1);
+	adreno_set_protected_registers(device, &index, 0x1F8, 2);
+	adreno_set_protected_registers(device, &index, 0x45E, 2);
+	adreno_set_protected_registers(device, &index, 0x460, 4);
+
+	/* RB registers */
+	adreno_set_protected_registers(device, &index, 0xCC0, 0);
+
+	/* VBIF registers */
+	adreno_set_protected_registers(device, &index, 0x3000, 6);
+
+	/* SMMU registers */
+	adreno_set_protected_registers(device, &index, 0x4000, 14);
+}
 
 	BUG_ON(vbif == NULL);
 
